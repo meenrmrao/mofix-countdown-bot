@@ -15,8 +15,13 @@
     liveBanner: document.getElementById("live-banner"),
   };
 
-  let targetMs = null;
-  let liveMessage = null;
+  // Seed from the server-rendered data attributes so the very first paint
+  // (and every render thereafter, even if a later /api/countdowns sync
+  // fails or momentarily doesn't include this slug) is correct immediately
+  // — the countdown no longer depends entirely on a fetch() resolving
+  // before it can show anything other than 00:00:00:00.
+  let targetMs = consoleEl.dataset.target ? new Date(consoleEl.dataset.target).getTime() : null;
+  let liveMessage = consoleEl.dataset.liveMessage || null;
   let finished = false;
 
   function pad(n) {
@@ -24,7 +29,8 @@
   }
 
   function renderRemaining() {
-    if (finished || targetMs === null) return;
+    if (finished) return;
+    if (targetMs === null || Number.isNaN(targetMs)) return;
 
     const diff = targetMs - Date.now();
     if (diff <= 0) {
@@ -73,8 +79,15 @@
     }
   }
 
-  // Tick every second locally for a smooth display, but re-sync with the
-  // server periodically so the timer never drifts and reacts to admin edits.
+  // Render immediately from the server-embedded data (no flash of zeros),
+  // then tick every second locally for a smooth display, and re-sync with
+  // the server periodically so the timer never drifts and reacts to admin
+  // edits (new target time, stop/start, completion, etc).
+  if (consoleEl.dataset.status === "completed") {
+    finish();
+  } else {
+    renderRemaining();
+  }
   syncFromServer().then(renderRemaining);
   setInterval(renderRemaining, 1000);
   setInterval(syncFromServer, 20000);

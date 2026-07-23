@@ -9,14 +9,14 @@ announcement message.
 Run with:  python run_bot.py
 """
 import asyncio
-import datetime as dt
+import contextlib
 import logging
 import sys
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
+from aiogram.exceptions import TelegramBadRequest, TelegramConflictError, TelegramRetryAfter
 from aiogram.filters import CommandStart
 from aiogram.types import Message
 
@@ -61,7 +61,7 @@ async def sync_countdown(bot: Bot, countdown):
     if not countdown.chat_id:
         return
 
-    days, hours, minutes, _, total_seconds = remaining_parts(countdown.target_datetime_utc)
+    _, _, _, _, total_seconds = remaining_parts(countdown.target_datetime_utc)
     text = format_countdown_message(countdown)
 
     try:
@@ -100,9 +100,22 @@ async def sync_countdown(bot: Bot, countdown):
         repo.heartbeat(error=str(e))
 
 
-async def countdown_loop(bot: Bot):
-    """Background loop: runs every UPDATE_INTERVAL_SECONDS."""
-    while True:
+async def countdown_loop(bot: Bot, stop_event: asyncio.Event):
+    """Background loop: runs every UPDATE_INTERVAL_SECONDS.
+
+    Writes a heartbeat immediately on startup (so the dashboard flips to
+    "Online" right away instead of waiting up to UPDATE_INTERVAL_SECONDS),
+    then on every cycle. When a restart is requested from the dashboard,
+    this sets `stop_event` and returns instead of calling sys.exit()
+    directly — sys.exit() here would only kill *this* asyncio task (since
+    it runs as a separate task from dp.start_polling()), not the process,
+    which used to leave the bot polling forever with a permanently frozen
+    heartbeat after the first restart click. The actual process exit now
+    happens once in main(), after both tasks have been cleanly stopped.
+    """
+    repo.heartbeat()
+
+    while not stop_event.is_set():
         try:
             active = repo.get_active_countdowns()
             for countdown in active:
@@ -110,15 +123,19 @@ async def countdown_loop(bot: Bot):
             repo.heartbeat()
 
             if repo.should_restart():
-                logger.info("Restart requested from dashboard. Exiting for supervisor restart.")
+                logger.info("Restart requested from dashboard. Stopping for supervisor restart.")
                 repo.clear_restart_flag()
-                sys.exit(0)
+                stop_event.set()
+                break
 
         except Exception as e:
             logger.exception("Error in countdown loop: %s", e)
             repo.heartbeat(error=str(e))
 
-        await asyncio.sleep(config.UPDATE_INTERVAL_SECONDS)
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=config.UPDATE_INTERVAL_SECONDS)
+        except asyncio.TimeoutError:
+            pass  # normal case: just means it's time for the next cycle
 
 
 async def main():
@@ -133,10 +150,63 @@ async def main():
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
 
-    asyncio.create_task(countdown_loop(bot))
+    # Clear any leftover webhook and drop stale pending updates before
+    # polling. A dangling webhook (or an old, unreleased getUpdates session
+    # from a previous instance that crashed mid-poll, e.g. during a Railway
+    # rolling redeploy) is the most common real-world cause of
+    # "TelegramConflictError: terminated by other getUpdates request" — this
+    # makes sure Telegram's server-side state is clean before we start.
+    await bot.delete_webhook(drop_pending_updates=True)
+
+    stop_event = asyncio.Event()
+    loop_task = asyncio.create_task(countdown_loop(bot, stop_event))
+    polling_task = asyncio.create_task(dp.start_polling(bot, handle_signals=True))
 
     logger.info("MOFIX Countdown Bot started. Polling for commands...")
-    await dp.start_polling(bot)
+
+    done, pending = await asyncio.wait(
+        {loop_task, polling_task}, return_when=asyncio.FIRST_COMPLETED
+    )
+
+    # Whichever finished first (a restart request via loop_task, or the
+    # poller stopping/erroring), cleanly cancel the other side rather than
+    # leaving an orphaned task running.
+    for task in pending:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    await bot.session.close()
+
+    conflict_error = None
+    for task in done:
+        if task is polling_task:
+            exc = task.exception() if not task.cancelled() else None
+            if isinstance(exc, TelegramConflictError):
+                conflict_error = exc
+            elif exc is not None:
+                raise exc
+
+    if conflict_error is not None:
+        logger.error(
+            "TelegramConflictError: another instance of this bot is already "
+            "polling with the same BOT_TOKEN ('terminated by other getUpdates "
+            "request'). This means two processes are polling at once — check "
+            "for a duplicate Railway service/replica, a leftover local "
+            "`python run_bot.py`, or a second deployment still shutting down. "
+            "Exiting so only one instance remains; the platform's process "
+            "supervisor should not restart this into a conflict loop once "
+            "the duplicate is stopped."
+        )
+        sys.exit(1)
+
+    if stop_event.is_set():
+        logger.info("Exiting for supervisor restart.")
+        sys.exit(0)
+
+    # polling_task ended on its own without an exception and without a
+    # restart being requested (e.g. graceful shutdown signal) — exit clean.
+    sys.exit(0)
 
 
 if __name__ == "__main__":

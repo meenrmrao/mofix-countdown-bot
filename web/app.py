@@ -2,18 +2,23 @@
 MOFIX Countdown Bot - Web Dashboard & Public Site
 """
 import datetime as dt
+import logging
 import shutil
 
 from flask import (Flask, render_template, request, redirect, url_for,
                     flash, jsonify, send_file, abort)
 from flask_login import (LoginManager, UserMixin, login_user, logout_user,
                           login_required)
+from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 from common.config import config
-from common.db import init_db, get_session
+from common.db import init_db, get_session, engine
 from common.models import Admin, Countdown, BotStatus, BOT_STATUS_SINGLETON_ID
 from common.utils import (verify_password, slugify, local_to_utc, utc_to_local,
                            remaining_parts)
+
+logger = logging.getLogger("mofix.web")
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = config.SECRET_KEY
@@ -81,13 +86,17 @@ def public_countdown(slug):
 
 @app.route("/api/countdowns")
 def api_countdowns():
-    """JSON feed the front-end JS polls to keep timers accurate without a refresh."""
+    """JSON feed the front-end JS polls to keep timers accurate without a refresh.
+
+    Intentionally NOT filtered by status: the public single-countdown page
+    (public_single.html) looks up its own row here by slug regardless of
+    status (active/stopped/completed) so a stopped countdown still renders
+    correctly instead of silently freezing at 00:00:00:00 with no
+    explanation. The home page listing (public_home) does its own separate,
+    filtered query for which countdowns to advertise.
+    """
     with get_session() as db:
-        countdowns = (
-            db.query(Countdown)
-            .filter(Countdown.status.in_(["active", "completed"]))
-            .all()
-        )
+        countdowns = db.query(Countdown).all()
         data = []
         now = dt.datetime.utcnow()
         for c in countdowns:
@@ -152,11 +161,19 @@ def dashboard():
         age = (dt.datetime.utcnow() - status.last_heartbeat).total_seconds()
         is_online = age <= config.HEARTBEAT_STALE_SECONDS
 
+    stats = {
+        "total": len(countdowns),
+        "active": sum(1 for c in countdowns if c.status == "active"),
+        "completed": sum(1 for c in countdowns if c.status == "completed"),
+        "stopped": sum(1 for c in countdowns if c.status == "stopped"),
+    }
+
     return render_template(
         "dashboard.html",
         countdowns=countdowns,
         bot_online=is_online,
         bot_status=status,
+        stats=stats,
     )
 
 
@@ -164,8 +181,11 @@ def dashboard():
 @login_required
 def countdown_new():
     if request.method == "POST":
-        _save_countdown_from_form(None)
-        flash("Countdown created.", "success")
+        error = _save_countdown_from_form(None)
+        if error:
+            flash(error, "error")
+            return render_template("countdown_form.html", countdown=None, timezones=_common_timezones())
+        flash("Countdown created and set to ACTIVE.", "success")
         return redirect(url_for("dashboard"))
     return render_template("countdown_form.html", countdown=None, timezones=_common_timezones())
 
@@ -178,7 +198,11 @@ def countdown_edit(countdown_id):
         if not countdown:
             abort(404)
         if request.method == "POST":
-            _save_countdown_from_form(countdown_id)
+            db.expunge(countdown)
+            error = _save_countdown_from_form(countdown_id)
+            if error:
+                flash(error, "error")
+                return render_template("countdown_form.html", countdown=countdown, timezones=_common_timezones())
             flash("Countdown updated.", "success")
             return redirect(url_for("dashboard"))
         db.expunge(countdown)
@@ -235,6 +259,16 @@ def bot_restart():
 @app.route("/admin/backup", methods=["GET"])
 @login_required
 def backup_db():
+    if config.DATABASE_URL.startswith("sqlite"):
+        # In WAL mode, recently committed rows can still be sitting in the
+        # separate "<db>-wal" file and not yet folded into the main .db
+        # file. A raw file copy of just the main file can therefore miss
+        # recent writes. TRUNCATE checkpoints everything back into the main
+        # file (and empties/removes the -wal file) so the copy below is a
+        # complete, consistent snapshot.
+        with engine.connect() as conn:
+            conn.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
+
     ts = dt.datetime.utcnow().strftime("%Y%m%d-%H%M%S")
     dest = config.BACKUP_DIR / f"mofix-backup-{ts}.db"
     shutil.copy(config.DATABASE_PATH, dest)
@@ -254,27 +288,54 @@ def _common_timezones():
 
 
 def _save_countdown_from_form(countdown_id):
+    """Create or update a countdown from the submitted form.
+
+    Returns an error message string if something went wrong (and nothing
+    was saved), or None on success.
+    """
     form = request.form
     tz_name = form.get("timezone", config.DEFAULT_TIMEZONE)
-    naive_local = dt.datetime.strptime(form.get("target_datetime"), "%Y-%m-%dT%H:%M")
-    target_utc = local_to_utc(naive_local, tz_name)
 
-    with get_session() as db:
-        if countdown_id:
-            countdown = db.query(Countdown).filter_by(id=countdown_id).first()
-        else:
-            countdown = Countdown()
-            db.add(countdown)
+    try:
+        naive_local = dt.datetime.strptime(form.get("target_datetime", ""), "%Y-%m-%dT%H:%M")
+        target_utc = local_to_utc(naive_local, tz_name)
+    except (ValueError, TypeError):
+        return "Please provide a valid target date & time."
+    except Exception:
+        return f"Unrecognized timezone: {tz_name!r}."
 
-        countdown.name = form.get("name", "Untitled Countdown").strip()
-        countdown.slug = slugify(form.get("slug") or countdown.name)
-        countdown.title_line = form.get("title_line") or "MOFIX AUTH TOOL"
-        countdown.subtitle_line = form.get("subtitle_line") or "Release Countdown"
-        countdown.live_message = form.get("live_message") or "MOFIX AUTH TOOL IS NOW LIVE!"
-        countdown.announcement_text = form.get("announcement_text") or "The wait is over! 🎉"
-        countdown.target_datetime_utc = target_utc
-        countdown.timezone = tz_name
-        countdown.chat_id = form.get("chat_id") or None
+    name = form.get("name", "").strip() or "Untitled Countdown"
+    slug = slugify(form.get("slug") or name)
+
+    try:
+        with get_session() as db:
+            if countdown_id:
+                countdown = db.query(Countdown).filter_by(id=countdown_id).first()
+                if not countdown:
+                    return "Countdown not found."
+            else:
+                countdown = Countdown()
+                # Requirement: every countdown is automatically ACTIVE the
+                # moment it's created — no separate "activate" step, and no
+                # dependency on the (now unused) "draft" state that used to
+                # leave freshly created countdowns invisible to the public
+                # page's timer.
+                countdown.status = "active"
+                db.add(countdown)
+
+            countdown.name = name
+            countdown.slug = slug
+            countdown.title_line = form.get("title_line") or "MOFIX AUTH TOOL"
+            countdown.subtitle_line = form.get("subtitle_line") or "Release Countdown"
+            countdown.live_message = form.get("live_message") or "MOFIX AUTH TOOL IS NOW LIVE!"
+            countdown.announcement_text = form.get("announcement_text") or "The wait is over! 🎉"
+            countdown.target_datetime_utc = target_utc
+            countdown.timezone = tz_name
+            countdown.chat_id = form.get("chat_id") or None
+    except IntegrityError:
+        return f"The slug '{slug}' is already used by another countdown. Please choose a different one."
+
+    return None
 
 
 def create_app():

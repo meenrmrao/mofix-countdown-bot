@@ -22,7 +22,11 @@
   </header>
 
   <main class="site-main">
-    <section class="console" id="console" data-slug="{{ countdown.slug }}">
+    <section class="console" id="console"
+              data-slug="{{ countdown.slug }}"
+              data-target="{{ countdown.target_datetime_utc.isoformat() }}Z"
+              data-status="{{ countdown.status }}"
+              data-live-message="{{ countdown.live_message }}">
       <div class="console-ring"></div>
       <div class="console-eyebrow">🚀 {{ countdown.title_line }}</div>
       <h1 class="console-title" id="subtitle">⏳ {{ countdown.subtitle_line }}</h1>

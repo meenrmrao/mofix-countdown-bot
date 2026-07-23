@@ -47,8 +47,15 @@ class Countdown(Base):
     is_pinned = Column(Boolean, default=False)
     announcement_message_id = Column(Integer, nullable=True)
 
-    # State: draft | active | stopped | completed
-    status = Column(String(20), default="draft")
+    # State: active | stopped | completed
+    # NOTE: every countdown is automatically saved as ACTIVE the moment it is
+    # created (see web/app.py::_save_countdown_from_form). "draft" used to be
+    # the default here, but nothing in the UI ever offered a way to move a
+    # countdown out of "draft", and /api/countdowns (which the public page's
+    # JS depends on for its target time) only returns "active"/"completed"
+    # rows — so a countdown stuck on the old "draft" default was invisible to
+    # the public page's timer and rendered as a frozen 00:00:00:00 forever.
+    status = Column(String(20), default="active")
 
     created_at = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)

@@ -22,7 +22,8 @@
   </div>
   <div class="status-card">
     <div class="status-label">Total Countdowns</div>
-    <div class="status-value">{{ countdowns|length }}</div>
+    <div class="status-value">{{ stats.total }}</div>
+    <div class="muted small">{{ stats.active }} active · {{ stats.completed }} completed · {{ stats.stopped }} stopped</div>
   </div>
   <div class="status-card">
     <div class="status-label">Actions</div>

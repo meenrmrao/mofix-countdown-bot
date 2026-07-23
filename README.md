@@ -82,6 +82,11 @@ mofix-countdown-bot/
 - Python 3.10+
 - A Telegram bot token from [@BotFather](https://t.me/BotFather)
 - The bot must be an **admin** in any chat/channel it posts and pins in
+- Timezone conversion uses Python's `zoneinfo`, backed by the `tzdata`
+  package in `requirements.txt` — this is required because minimal container
+  images (e.g. `python:3.12-slim`, used by the provided `Dockerfile`) don't
+  ship the OS-level IANA timezone database, so `zoneinfo` would otherwise
+  fail to resolve any timezone at runtime.
 
 ---
 
@@ -140,12 +145,23 @@ forward a message from the channel to [@JsonDumpBot](https://t.me/JsonDumpBot).
 
 The dashboard's **Restart Bot** button sets a flag in the database. The bot
 process checks this flag every cycle and exits cleanly (`sys.exit(0)`) when
-it's set — it does **not** kill the process directly. For this to actually
-restart the bot, run it under a supervisor that restarts on exit:
+it's set, after first stopping its Telegram polling and background sync task
+— it does **not** kill the process abruptly mid-request. For this to
+actually bring the bot back, run it under a supervisor that restarts on
+exit:
 
 - **Docker / docker-compose**: already configured with `restart: unless-stopped`.
 - **Railway / Render**: services restart automatically on process exit.
 - **VPS**: use `systemd` (see below) or `pm2`/`supervisord`.
+
+> ⚠️ **Only run one bot instance per BOT_TOKEN.** Telegram allows only a
+> single active `getUpdates` poller per bot token. If two processes poll at
+> once (e.g. a duplicate Railway service/replica, a leftover local
+> `python run_bot.py` next to a deployed one, or two environments sharing
+> the same token), you'll see `TelegramConflictError: terminated by other
+> getUpdates request` in the logs. The bot now calls `delete_webhook()` on
+> startup and logs a clear message if it detects this conflict, but the fix
+> is always to make sure only one instance is actually running.
 
 ---
 

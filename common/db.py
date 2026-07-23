@@ -9,7 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker, scoped_session
 
 from common.config import config
-from common.models import Base, Admin, BotStatus, BOT_STATUS_SINGLETON_ID
+from common.models import Base, Admin, BotStatus, Countdown, BOT_STATUS_SINGLETON_ID
 from common.utils import hash_password
 
 logger = logging.getLogger("mofix.db")
@@ -45,6 +45,19 @@ def _set_sqlite_pragmas(dbapi_connection, connection_record):
     if dbapi_connection.__class__.__module__.startswith("sqlite3"):
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA journal_mode=WAL")
+        mode = cursor.fetchone()
+        if not mode or str(mode[0]).lower() != "wal":
+            # Some restricted / network-backed filesystems (certain volume
+            # mounts) silently refuse WAL mode and fall back to the default
+            # rollback journal instead of raising. That's not fatal, but it
+            # means writers hold a full-file lock while writing, so surface
+            # it loudly instead of failing silently.
+            logger.warning(
+                "SQLite journal_mode is '%s', not 'wal' — WAL mode could not "
+                "be enabled on this filesystem. Concurrent web+bot writes "
+                "may block each other more than expected.",
+                mode[0] if mode else "unknown",
+            )
         cursor.execute("PRAGMA synchronous=NORMAL")
         cursor.execute("PRAGMA busy_timeout=30000")
         cursor.execute("PRAGMA foreign_keys=ON")
@@ -90,6 +103,22 @@ def init_db():
             session.commit()
         except IntegrityError:
             session.rollback()  # another process/worker already seeded the status row
+
+        # One-time migration: earlier versions of this project defaulted new
+        # countdowns to status="draft", which the public site's /api feed
+        # never returns (only "active"/"completed" rows) — so countdowns
+        # created under that version are permanently invisible to their own
+        # public page and appear frozen at 00:00:00:00. Every countdown is
+        # now supposed to be active immediately on creation, so bring any
+        # leftover rows from an older deployment in line automatically.
+        migrated = (
+            session.query(Countdown)
+            .filter(Countdown.status == "draft")
+            .update({"status": "active"}, synchronize_session=False)
+        )
+        if migrated:
+            logger.info("Migrated %d legacy 'draft' countdown(s) to 'active'.", migrated)
+        session.commit()
     finally:
         session.close()
 
