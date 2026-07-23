@@ -71,6 +71,17 @@ class Countdown(Base):
         }
 
 
+#: BotStatus is meant to be a single-row table. We pin that one row to a
+#: fixed, known primary key instead of relying on "whichever row happens to
+#: be first" (`.first()` has no ORDER BY, so on a table with more than one
+#: row — e.g. if the web and bot processes ever raced and each inserted
+#: their own row — it can non-deterministically return a stale row that
+#: nobody is updating, making the dashboard show "Offline" forever even
+#: though the bot is heartbeating into a different row). All reads/writes
+#: of BotStatus should go through this fixed id.
+BOT_STATUS_SINGLETON_ID = 1
+
+
 class BotStatus(Base):
     """Singleton row used by the web dashboard to know if the bot is alive."""
     __tablename__ = "bot_status"

@@ -11,11 +11,28 @@ from flask_login import (LoginManager, UserMixin, login_user, logout_user,
 
 from common.config import config
 from common.db import init_db, get_session
-from common.models import Admin, Countdown, BotStatus
-from common.utils import verify_password, slugify, local_to_utc, remaining_parts
+from common.models import Admin, Countdown, BotStatus, BOT_STATUS_SINGLETON_ID
+from common.utils import (verify_password, slugify, local_to_utc, utc_to_local,
+                           remaining_parts)
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = config.SECRET_KEY
+
+
+@app.template_filter("to_local")
+def _to_local_filter(value, tz_name):
+    """Render a naive-UTC datetime column as local time in `tz_name`.
+
+    Used anywhere the template needs to show the countdown's target time
+    the way the admin originally entered it (dashboard table, edit form),
+    rather than the raw UTC value stored in the database.
+    """
+    if value is None:
+        return ""
+    try:
+        return utc_to_local(value, tz_name or config.DEFAULT_TIMEZONE)
+    except Exception:
+        return value
 
 login_manager = LoginManager()
 login_manager.init_app(app)
@@ -125,7 +142,9 @@ def logout():
 def dashboard():
     with get_session() as db:
         countdowns = db.query(Countdown).order_by(Countdown.created_at.desc()).all()
-        status = db.query(BotStatus).first()
+        # Fixed singleton id: guarantees we're reading the exact same row
+        # the bot process heartbeats into (see common/models.py).
+        status = db.get(BotStatus, BOT_STATUS_SINGLETON_ID)
         db.expunge_all()
 
     is_online = False
@@ -181,7 +200,9 @@ def countdown_delete(countdown_id):
 @login_required
 def countdown_start(countdown_id):
     with get_session() as db:
-        db.query(Countdown).filter_by(id=countdown_id).update({"status": "active"})
+        db.query(Countdown).filter_by(id=countdown_id).update(
+            {"status": "active"}, synchronize_session=False
+        )
     flash("Countdown started. The bot will post/update it within a minute.", "success")
     return redirect(url_for("dashboard"))
 
@@ -190,7 +211,9 @@ def countdown_start(countdown_id):
 @login_required
 def countdown_stop(countdown_id):
     with get_session() as db:
-        db.query(Countdown).filter_by(id=countdown_id).update({"status": "stopped"})
+        db.query(Countdown).filter_by(id=countdown_id).update(
+            {"status": "stopped"}, synchronize_session=False
+        )
     flash("Countdown stopped.", "success")
     return redirect(url_for("dashboard"))
 
@@ -199,9 +222,9 @@ def countdown_stop(countdown_id):
 @login_required
 def bot_restart():
     with get_session() as db:
-        status = db.query(BotStatus).first()
+        status = db.get(BotStatus, BOT_STATUS_SINGLETON_ID)
         if not status:
-            status = BotStatus()
+            status = BotStatus(id=BOT_STATUS_SINGLETON_ID)
             db.add(status)
         status.restart_requested = True
     flash("Restart requested. The bot process will exit and your process "

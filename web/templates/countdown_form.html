@@ -23,7 +23,7 @@
     <div class="form-field">
       <label>Target Date &amp; Time</label>
       <input type="datetime-local" name="target_datetime"
-             value="{{ (countdown.target_datetime_utc.strftime('%Y-%m-%dT%H:%M')) if countdown else '' }}" required>
+             value="{{ ((countdown.target_datetime_utc | to_local(countdown.timezone)).strftime('%Y-%m-%dT%H:%M')) if countdown else '' }}" required>
     </div>
     <div class="form-field">
       <label>Timezone</label>

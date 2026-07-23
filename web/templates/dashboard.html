@@ -55,7 +55,7 @@
           <div class="cell-title">{{ c.name }}</div>
           <div class="muted small">/{{ c.slug }}</div>
         </td>
-        <td>{{ c.target_datetime_utc.strftime('%Y-%m-%d %H:%M') }} UTC</td>
+        <td>{{ (c.target_datetime_utc | to_local(c.timezone)).strftime('%Y-%m-%d %H:%M') }}</td>
         <td>{{ c.timezone }}</td>
         <td>{{ c.chat_id or "—" }}</td>
         <td>{{ "✅" if c.is_pinned else "—" }}</td>

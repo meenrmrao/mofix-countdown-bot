@@ -170,9 +170,26 @@ SQLite database via a named volume, both auto-restarting.
 3. Add the environment variables from `.env.example` to both services.
 4. Both platforms auto-detect the `Procfile` if you prefer that instead of
    manually setting start commands.
-5. ⚠️ SQLite lives on local disk — attach a **persistent volume/disk** to
-   both services (or point `DATABASE_FILE` at a mounted volume) so data
-   survives redeploys, and make sure both services share the same volume.
+5. ⚠️ **Critical step — shared database.** Each Railway/Render service is
+   its own container with its own private, ephemeral disk. If the Web
+   service and the Bot service each get their own disk, they end up with
+   two *different* SQLite files: countdowns created (or started) in the
+   admin never appear on the public site's queries against the bot's copy,
+   and the bot's heartbeat never reaches the copy the dashboard reads —
+   which is exactly the "Bot Status: Offline" / "No countdowns are
+   running" symptom.
+
+   To fix this, both services **must** mount the same persistent Volume at
+   the same path:
+   - In Railway: create one Volume, then attach that *same* Volume to both
+     the web service and the bot service, mounted at (for example)
+     `/app/data`.
+   - Set `DATABASE_URL` (or `DATABASE_FILE`) identically on both services
+     so they resolve to the same file inside that shared mount — e.g.
+     `DATABASE_URL=sqlite:////app/data/mofix.db`.
+   - On startup both processes log the resolved database path
+     (`Using database: ...`) — check both services' logs and confirm they
+     print the exact same path.
 
 ### VPS (systemd)
 
