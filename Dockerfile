@@ -33,4 +33,4 @@ RUN mkdir -p /app/data /app/backups
 # This is the WEB service's default command. The bot service (run as a
 # separate Railway service from the same image) should override the start
 # command to: python run_bot.py
-CMD gunicorn -w 2 --timeout 120 --log-file - -b 0.0.0.0:${PORT:-5000} run_web:app
+CMD gunicorn -w 2 --timeout 120 --log-file - -b 0.0.0.0:$PORT run_web:app
