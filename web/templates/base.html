@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{% block title %}MOFIX Admin{% endblock %}</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body class="admin-body">
+<div class="admin-shell">
+  <aside class="admin-sidebar">
+    <div class="brand">
+      <span class="brand-mark">M</span>
+      <div>
+        <div class="brand-name">MOFIX</div>
+        <div class="brand-sub">Countdown Admin</div>
+      </div>
+    </div>
+    <nav class="admin-nav">
+      <a href="{{ url_for('dashboard') }}" class="nav-link active">Dashboard</a>
+      <a href="{{ url_for('countdown_new') }}" class="nav-link">+ New Countdown</a>
+      <a href="{{ url_for('public_home') }}" class="nav-link" target="_blank">View Site ↗</a>
+      <a href="{{ url_for('logout') }}" class="nav-link nav-link-danger">Log out</a>
+    </nav>
+  </aside>
+  <main class="admin-main">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <div class="flash-stack">
+        {% for category, message in messages %}
+          <div class="flash flash-{{ category }}">{{ message }}</div>
+        {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+  </main>
+</div>
+</body>
+</html>

@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MOFIX — Countdown</title>
+<meta name="description" content="Live release countdown for MOFIX AUTH TOOL. Track the launch in real time.">
+<meta name="theme-color" content="#05070d">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body class="site-body">
+  <div class="scanline"></div>
+  <div class="grid-glow"></div>
+
+  <header class="site-header">
+    <div class="site-brand">
+      <span class="site-brand-mark">M</span>
+      <span class="site-brand-name">MOFIX</span>
+    </div>
+  </header>
+
+  <main class="site-main">
+    {% if countdowns %}
+      <div class="event-list">
+        {% for c in countdowns %}
+        <a class="event-card" href="{{ url_for('public_countdown', slug=c.slug) }}">
+          <div class="event-card-eyebrow">{{ "LIVE" if c.status == "completed" else "COUNTDOWN" }}</div>
+          <h2>{{ c.name }}</h2>
+          <p class="muted">{{ c.title_line }}</p>
+        </a>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="empty-console">
+        <div class="empty-console-ring"></div>
+        <h1>No countdowns are running</h1>
+        <p class="muted">Check back soon — new launches will appear here automatically.</p>
+      </div>
+    {% endif %}
+  </main>
+
+  <footer class="site-footer">
+    <span>MOFIX Countdown System</span>
+  </footer>
+</body>
+</html>

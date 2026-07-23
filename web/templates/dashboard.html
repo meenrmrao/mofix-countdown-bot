@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — MOFIX Admin{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Countdowns</h1>
+    <p class="muted">Create, edit and control every countdown from one place.</p>
+  </div>
+  <a href="{{ url_for('countdown_new') }}" class="btn btn-primary">+ New Countdown</a>
+</div>
+
+<div class="status-row">
+  <div class="status-card">
+    <div class="status-label">Bot Status</div>
+    <div class="status-value">
+      <span class="dot {{ 'dot-online' if bot_online else 'dot-offline' }}"></span>
+      {{ "Online" if bot_online else "Offline" }}
+    </div>
+    {% if bot_status and bot_status.last_heartbeat %}
+      <div class="muted small">Last heartbeat: {{ bot_status.last_heartbeat.strftime('%Y-%m-%d %H:%M:%S') }} UTC</div>
+    {% endif %}
+  </div>
+  <div class="status-card">
+    <div class="status-label">Total Countdowns</div>
+    <div class="status-value">{{ countdowns|length }}</div>
+  </div>
+  <div class="status-card">
+    <div class="status-label">Actions</div>
+    <div class="status-actions">
+      <form method="POST" action="{{ url_for('bot_restart') }}">
+        <button type="submit" class="btn btn-ghost">Restart Bot</button>
+      </form>
+      <a href="{{ url_for('backup_db') }}" class="btn btn-ghost">Backup DB</a>
+    </div>
+  </div>
+</div>
+
+<div class="table-wrap">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Target (local tz)</th>
+        <th>Timezone</th>
+        <th>Chat ID</th>
+        <th>Pinned</th>
+        <th>Status</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for c in countdowns %}
+      <tr>
+        <td>
+          <div class="cell-title">{{ c.name }}</div>
+          <div class="muted small">/{{ c.slug }}</div>
+        </td>
+        <td>{{ c.target_datetime_utc.strftime('%Y-%m-%d %H:%M') }} UTC</td>
+        <td>{{ c.timezone }}</td>
+        <td>{{ c.chat_id or "—" }}</td>
+        <td>{{ "✅" if c.is_pinned else "—" }}</td>
+        <td><span class="badge badge-{{ c.status }}">{{ c.status }}</span></td>
+        <td class="row-actions">
+          <a href="{{ url_for('countdown_edit', countdown_id=c.id) }}" class="btn btn-sm">Edit</a>
+          {% if c.status == "active" %}
+          <form method="POST" action="{{ url_for('countdown_stop', countdown_id=c.id) }}" class="inline-form">
+            <button type="submit" class="btn btn-sm btn-warning">Stop</button>
+          </form>
+          {% else %}
+          <form method="POST" action="{{ url_for('countdown_start', countdown_id=c.id) }}" class="inline-form">
+            <button type="submit" class="btn btn-sm btn-success">Start</button>
+          </form>
+          {% endif %}
+          <form method="POST" action="{{ url_for('countdown_delete', countdown_id=c.id) }}" class="inline-form" onsubmit="return confirm('Delete this countdown?');">
+            <button type="submit" class="btn btn-sm btn-danger">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="empty-row">No countdowns yet. Create your first one above.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
